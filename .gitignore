@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environment
+venv/
+.venv/
+
+# Env / secrets
+.env
+.env.*
+
+# Runtime data
+leads_history.json
+last_row_google_sheet.txt
+
+# Ngrok
+ngrok*
+*.tgz
+
+# Logs
+*.log

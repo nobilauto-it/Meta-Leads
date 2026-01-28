@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8" />
+    <title>Онлайн-лиды из Мета</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            margin: 20px;
+            background: #f7f7f7;
+        }
+        h1 {
+            margin-bottom: 10px;
+        }
+        #status {
+            font-size: 14px;
+            margin-bottom: 10px;
+            color: #555;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            background: #fff;
+            box-shadow: 0 0 8px rgba(0,0,0,0.05);
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 6px 8px;
+            font-size: 13px;
+        }
+        th {
+            background: #f0f0f0;
+            text-align: left;
+        }
+        tr:nth-child(even) {
+            background: #fafafa;
+        }
+        .highlight {
+            animation: flash 1s ease-out;
+        }
+        @keyframes flash {
+            from { background-color: #d4edda; }
+            to   { background-color: inherit; }
+        }
+    </style>
+</head>
+<body>
+<h1>Лиды из Меты</h1>
+<div id="status">Загрузка…</div>
+
+<table id="leads-table">
+    <thead>
+    <tr id="header-row">
+        <!-- заголовки колонок подставим из данных -->
+    </tr>
+    </thead>
+    <tbody id="leads-body">
+    <!-- сюда будем добавлять строки -->
+    </tbody>
+</table>
+
+<script>
+    // Как часто опрашивать сервер (в миллисекундах)
+    const POLL_INTERVAL = 5000; // 5 секунд
+
+    const statusEl = document.getElementById('status');
+    const headerRow = document.getElementById('header-row');
+    const tbody = document.getElementById('leads-body');
+
+    let headerKeys = null; // список ключей (колонок)
+
+    // Универсальная функция для создания строки таблицы из объекта lead
+    function appendLeadRow(lead, prepend = false) {
+        if (!lead || typeof lead !== 'object') return;
+
+        // Если заголовки ещё не нарисованы — построим их из ключей объекта
+        if (!headerKeys) {
+            headerKeys = Object.keys(lead);
+            headerRow.innerHTML = '';
+            headerKeys.forEach(key => {
+                const th = document.createElement('th');
+                th.textContent = key;
+                headerRow.appendChild(th);
+            });
+        }
+
+        const tr = document.createElement('tr');
+        headerKeys.forEach(key => {
+            const td = document.createElement('td');
+            td.textContent = lead[key] ?? '';
+            tr.appendChild(td);
+        });
+
+        tr.classList.add('highlight');
+
+        if (prepend && tbody.firstChild) {
+            tbody.insertBefore(tr, tbody.firstChild);
+        } else {
+            tbody.appendChild(tr);
+        }
+    }
+
+    // Первичная загрузка: берём просто последний лид
+    async function loadInitialLead() {
+        try {
+            statusEl.textContent = 'Загрузка последнего лида…';
+            const resp = await fetch('/api/leads/last');
+            const lead = await resp.json();
+
+            tbody.innerHTML = '';
+
+            if (Object.keys(lead).length === 0) {
+                statusEl.textContent = 'Лидов пока нет.';
+                return;
+            }
+
+            appendLeadRow(lead);
+            statusEl.textContent = 'Показан последний лид. Ожидаем новые…';
+        } catch (err) {
+            console.error(err);
+            statusEl.textContent = 'Ошибка при загрузке: ' + err;
+        }
+    }
+
+    // Периодический опрос: забираем только новые лиды
+    async function pollNewLeads() {
+        try {
+            const resp = await fetch('/api/leads/new');
+            const data = await resp.json();
+
+            if (Array.isArray(data) && data.length > 0) {
+                statusEl.textContent = 'Новые лиды: ' + data.length;
+                // добавляем новые строки в начало таблицы, чтобы сверху были самые свежие
+                data.forEach(lead => appendLeadRow(lead, true));
+            } else {
+                statusEl.textContent = 'Новых лидов нет.';
+            }
+        } catch (err) {
+            console.error(err);
+            statusEl.textContent = 'Ошибка при опросе: ' + err;
+        }
+    }
+
+    // Старт
+    loadInitialLead().then(() => {
+        // Запускаем таймер после первой загрузки
+        setInterval(pollNewLeads, POLL_INTERVAL);
+    });
+</script>
+</body>
+</html>
