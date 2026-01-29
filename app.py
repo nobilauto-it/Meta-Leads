@@ -33,7 +33,7 @@ BITRIX24_CONTACT_ADD_URL = f"{BITRIX24_WEBHOOK_BASE}/crm.contact.add"
 BITRIX_SOURCE_ID = "UC_Y3Q75D"
 
 # Ротация ТОЛЬКО между двумя ответственными
-ASSIGNED_IDS = [20842, 21392]
+ASSIGNED_IDS = [21392]
 ASSIGNED_INDEX = 0
 
 LAST_BITRIX_DEBUG: Dict = {}
