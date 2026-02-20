@@ -8,7 +8,7 @@ from datetime import date
 from typing import List, Dict
 
 import requests
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, request
 
 app = Flask(__name__)
 app.config["JSON_AS_ASCII"] = False  # чтобы JSON отдавал русские буквы нормально
@@ -525,6 +525,39 @@ def api_test():
         return jsonify({"error": "Нет строк"})
     send_lead_row_to_bitrix24(rows[-1])
     return jsonify(LAST_BITRIX_DEBUG)
+
+
+@app.route("/api/test/send_row_to_bitrix")
+def api_test_send_row():
+    rows = load_sheet_rows()
+    if not rows:
+        return jsonify({"error": "No rows in Google Sheet"}), 404
+
+    # Google Sheets numbering: row 1 is header, row 2 is first lead.
+    row_number = request.args.get("row", type=int)
+    if row_number is None:
+        return jsonify({"error": "Query param 'row' is required, example: ?row=2"}), 400
+    if row_number < 2:
+        return jsonify({"error": "Row must be >= 2 (row 1 is header)"}), 400
+
+    row_index = row_number - 2
+    if row_index >= len(rows):
+        return jsonify(
+            {
+                "error": "Row out of range",
+                "requested_row": row_number,
+                "max_row_with_data": len(rows) + 1,
+            }
+        ), 404
+
+    send_lead_row_to_bitrix24(rows[row_index])
+    return jsonify(
+        {
+            "requested_row": row_number,
+            "row_index_in_data": row_index,
+            "bitrix_debug": LAST_BITRIX_DEBUG,
+        }
+    )
 
 
 if __name__ == "__main__":
