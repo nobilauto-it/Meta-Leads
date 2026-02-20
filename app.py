@@ -2,8 +2,9 @@ import csv
 import io
 import os
 import json
-import time
 import re
+import time
+from datetime import date
 from typing import List, Dict
 
 import requests
@@ -14,7 +15,7 @@ app.config["JSON_AS_ASCII"] = False  # чтобы JSON отдавал русск
 
 # --- НАСТРОЙКИ GOOGLE SHEETS ---
 
-SHEET_ID = "1oPchLHabGrG2-5FizrEyO079GIHTzFBbfNS50S1EMC0"
+SHEET_ID = "16O_X25CT3tqHbk6y_ebBilx_oMy0wddA3PH0-YpwEGo"
 GID = "0"
 
 CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}"
@@ -26,15 +27,23 @@ REFRESH_INTERVAL_SECONDS = 30
 
 # --- НАСТРОЙКИ BITRIX24 ---
 
-BITRIX24_WEBHOOK_BASE = "https://nobilauto.bitrix24.ru/rest/18397/k3gp4gc75esvw3xv"
+BITRIX24_WEBHOOK_BASE = "https://nobilauto.bitrix24.ru/rest/18397/h5c7kw97sfp3uote"
 BITRIX24_LEAD_ADD_URL = f"{BITRIX24_WEBHOOK_BASE}/crm.lead.add"
 BITRIX24_CONTACT_ADD_URL = f"{BITRIX24_WEBHOOK_BASE}/crm.contact.add"
 
 BITRIX_SOURCE_ID = "UC_Y3Q75D"
 
-# Ротация ТОЛЬКО между двумя ответственными
-ASSIGNED_IDS = [21392,14804]
+# Ротация между ответственными + дневные лимиты
+ASSIGNED_IDS = [21392, 24518, 14804]
 ASSIGNED_INDEX = 0
+# Лимит лидов в день (None = без лимита). В 00:00 нового дня счётчики обнуляются.
+DAILY_LIMITS: Dict[int, int] = {
+    21392: 4,
+    14804: 6,   # Георгий — макс. 6
+    # 24518 (Андрей) — без лимита, все остальные лиды
+}
+_assigned_daily_count: Dict[int, int] = {}  # id -> количество лидов сегодня
+_assigned_last_date: date | None = None  # дата, на которую актуальны счётчики
 
 LAST_BITRIX_DEBUG: Dict = {}
 
@@ -121,12 +130,32 @@ def normalize_phone(raw: str) -> str:
 
 # ================ ROTATION ================
 
+def _reset_daily_counters_if_new_day() -> None:
+    """Обнуляет счётчики лидов по сотрудникам при наступлении нового дня."""
+    global _assigned_last_date, _assigned_daily_count
+    today = date.today()
+    if _assigned_last_date is None or _assigned_last_date != today:
+        _assigned_daily_count = {}
+        _assigned_last_date = today
+
+
 def get_next_assigned_id() -> int:
     global ASSIGNED_INDEX
-    assigned_id = ASSIGNED_IDS[ASSIGNED_INDEX]
-    ASSIGNED_INDEX = (ASSIGNED_INDEX + 1) % len(ASSIGNED_IDS)
-    print(f"[Bitrix24] Выбран ASSIGNED_BY_ID: {assigned_id}")
-    return assigned_id
+    _reset_daily_counters_if_new_day()
+
+    n = len(ASSIGNED_IDS)
+    for _ in range(n):
+        candidate_id = ASSIGNED_IDS[ASSIGNED_INDEX]
+        ASSIGNED_INDEX = (ASSIGNED_INDEX + 1) % n
+
+        limit = DAILY_LIMITS.get(candidate_id)  # None = без лимита
+        count = _assigned_daily_count.get(candidate_id, 0)
+        if limit is None or count < limit:
+            _assigned_daily_count[candidate_id] = count + 1
+            print(f"[Bitrix24] Выбран ASSIGNED_BY_ID: {candidate_id} (сегодня: {count + 1})")
+            return candidate_id
+
+    return ASSIGNED_IDS[0]  # страховка при некорректной конфигурации лимитов
 
 
 # ============= BUDGET PARSER =============
@@ -251,17 +280,17 @@ def is_dummy_row(row: Dict) -> bool:
 
 def extract_contact_fields_from_row(row: Dict) -> Dict:
     full_name = (
-        row.get("full_name")
-        or row.get("полное имя")
-        or row.get("Name")
-        or ""
+            row.get("full_name")
+            or row.get("полное имя")
+            or row.get("Name")
+            or ""
     )
 
     raw_phone = (
-        row.get("phone_number")
-        or row.get("нр. тел:")
-        or row.get("Phone")
-        or ""
+            row.get("phone_number")
+            or row.get("нр. тел:")
+            or row.get("Phone")
+            or ""
     )
     phone = normalize_phone(raw_phone)
 
@@ -300,12 +329,12 @@ def extract_contact_fields_from_row(row: Dict) -> Dict:
 
 # =============== BITRIX CONTACT ===============
 
-def create_contact_in_bitrix24(first_name, last_name, phone, email) -> int | None:
+def create_contact_in_bitrix24(first_name, last_name, phone, email, assigned_id: int) -> int | None:
     if not (first_name or last_name or phone or email):
         print("[Bitrix24] ✗ Пустой контакт — не создаём")
         return None
 
-    data = {"fields": {"NAME": first_name, "LAST_NAME": last_name}}
+    data = {"fields": {"NAME": first_name, "LAST_NAME": last_name, "ASSIGNED_BY_ID": assigned_id}}
 
     if phone:
         data["fields"]["PHONE"] = [{"VALUE": phone, "VALUE_TYPE": "WORK"}]
@@ -330,7 +359,7 @@ def create_contact_in_bitrix24(first_name, last_name, phone, email) -> int | Non
 
 # =============== BITRIX LEAD ===============
 
-def create_lead_in_bitrix24(contact_id: int | None, fields: Dict):
+def create_lead_in_bitrix24(contact_id: int | None, fields: Dict, assigned_id: int):
     global LAST_BITRIX_DEBUG
 
     first_name = fields["first_name"]
@@ -342,8 +371,6 @@ def create_lead_in_bitrix24(contact_id: int | None, fields: Dict):
     title = "Лид из META"
     if first_name or last_name:
         title += f": {first_name} {last_name}".strip()
-
-    assigned_id = get_next_assigned_id()
 
     lead_fields = {
         "TITLE": title,
@@ -416,14 +443,17 @@ def send_lead_row_to_bitrix24(row: Dict) -> None:
 
     fields = extract_contact_fields_from_row(row)
 
+    assigned_id = get_next_assigned_id()
+
     contact_id = create_contact_in_bitrix24(
         fields["first_name"],
         fields["last_name"],
         fields["phone"],
-        fields["email"]
+        fields["email"],
+        assigned_id
     )
 
-    lead_id = create_lead_in_bitrix24(contact_id, fields)
+    lead_id = create_lead_in_bitrix24(contact_id, fields, assigned_id)
 
     if lead_id:
         print(f"[Bitrix24] Лид создан {lead_id}")
