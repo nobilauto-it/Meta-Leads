@@ -2,150 +2,373 @@
 <html lang="ru">
 <head>
     <meta charset="utf-8" />
-    <title>Онлайн-лиды из Мета</title>
+    <title>Meta Leads</title>
     <style>
         body {
             font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
             margin: 20px;
             background: #f7f7f7;
+            color: #1f2937;
         }
         h1 {
-            margin-bottom: 10px;
+            margin-bottom: 8px;
+        }
+        h2 {
+            margin: 0 0 10px;
+            font-size: 18px;
         }
         #status {
             font-size: 14px;
+            margin-bottom: 12px;
+            color: #4b5563;
+        }
+        .section {
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 14px;
+        }
+        .row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
             margin-bottom: 10px;
-            color: #555;
+        }
+        input, textarea, button {
+            font-size: 13px;
+        }
+        input, textarea {
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            padding: 6px 8px;
+        }
+        textarea {
+            width: 100%;
+            min-height: 80px;
+            box-sizing: border-box;
+            resize: vertical;
+        }
+        button {
+            border: 1px solid #d1d5db;
+            background: #fff;
+            border-radius: 6px;
+            padding: 6px 10px;
+            cursor: pointer;
+        }
+        button.primary {
+            background: #047857;
+            color: #fff;
+            border-color: #047857;
+        }
+        button.danger {
+            border-color: #dc2626;
+            color: #dc2626;
         }
         table {
             border-collapse: collapse;
             width: 100%;
             background: #fff;
-            box-shadow: 0 0 8px rgba(0,0,0,0.05);
         }
         th, td {
-            border: 1px solid #ddd;
+            border: 1px solid #e5e7eb;
             padding: 6px 8px;
             font-size: 13px;
+            text-align: left;
+            vertical-align: top;
         }
         th {
-            background: #f0f0f0;
-            text-align: left;
+            background: #f3f4f6;
         }
-        tr:nth-child(even) {
-            background: #fafafa;
-        }
-        .highlight {
-            animation: flash 1s ease-out;
-        }
-        @keyframes flash {
-            from { background-color: #d4edda; }
-            to   { background-color: inherit; }
+        .hint {
+            color: #6b7280;
+            font-size: 12px;
+            margin-top: 8px;
         }
     </style>
 </head>
 <body>
-<h1>Лиды из Меты</h1>
-<div id="status">Загрузка…</div>
+<h1>Лиды из Meta</h1>
+<div id="status">Загрузка...</div>
 
-<table id="leads-table">
-    <thead>
-    <tr id="header-row">
-        <!-- заголовки колонок подставим из данных -->
-    </tr>
-    </thead>
-    <tbody id="leads-body">
-    <!-- сюда будем добавлять строки -->
-    </tbody>
-</table>
+<div class="section">
+    <h2>Ответственные</h2>
+    <div class="row">
+        <input id="new-assignee-id" type="number" min="1" placeholder="ID сотрудника">
+        <input id="new-assignee-limit" type="number" min="0" placeholder="Лимит в день (пусто = без лимита)">
+        <button id="add-assignee-btn" class="primary">Добавить сотрудника</button>
+    </div>
+    <table>
+        <thead>
+        <tr>
+            <th>ID</th>
+            <th>Имя Фамилия</th>
+            <th>Лимит/день</th>
+            <th>Сегодня выдано</th>
+            <th>Действия</th>
+        </tr>
+        </thead>
+        <tbody id="assignees-body"></tbody>
+    </table>
+</div>
+
+<div class="section">
+    <h2>Лиды</h2>
+    <div class="row">
+        <textarea id="manual-lead-json" placeholder='JSON лида, например: {"full_name":"Иван","phone_number":"+373..."}'></textarea>
+        <button id="add-lead-btn" class="primary">Добавить лид вручную</button>
+    </div>
+
+    <table id="leads-table">
+        <thead>
+        <tr id="header-row"></tr>
+        </thead>
+        <tbody id="leads-body"></tbody>
+    </table>
+    <div class="hint">Удаление лида удаляет запись из локальной истории приложения, а не из Google Sheets.</div>
+</div>
 
 <script>
-    // Как часто опрашивать сервер (в миллисекундах)
-    const POLL_INTERVAL = 5000; // 5 секунд
+    const POLL_INTERVAL = 5000;
 
     const statusEl = document.getElementById('status');
     const headerRow = document.getElementById('header-row');
-    const tbody = document.getElementById('leads-body');
+    const leadsBody = document.getElementById('leads-body');
+    const assigneesBody = document.getElementById('assignees-body');
 
-    let headerKeys = null; // список ключей (колонок)
+    const addAssigneeBtn = document.getElementById('add-assignee-btn');
+    const newAssigneeIdEl = document.getElementById('new-assignee-id');
+    const newAssigneeLimitEl = document.getElementById('new-assignee-limit');
 
-    // Универсальная функция для создания строки таблицы из объекта lead
-    function appendLeadRow(lead, prepend = false) {
-        if (!lead || typeof lead !== 'object') return;
+    const addLeadBtn = document.getElementById('add-lead-btn');
+    const manualLeadJsonEl = document.getElementById('manual-lead-json');
 
-        // Если заголовки ещё не нарисованы — построим их из ключей объекта
-        if (!headerKeys) {
-            headerKeys = Object.keys(lead);
-            headerRow.innerHTML = '';
-            headerKeys.forEach(key => {
-                const th = document.createElement('th');
-                th.textContent = key;
-                headerRow.appendChild(th);
-            });
+    let leads = [];
+    let headerKeys = [];
+
+    function parseLimit(raw) {
+        const v = String(raw ?? '').trim();
+        if (!v) return null;
+        const n = Number(v);
+        if (!Number.isInteger(n) || n < 0) {
+            throw new Error('Лимит должен быть пустым или числом >= 0');
         }
+        return n;
+    }
 
-        const tr = document.createElement('tr');
-        headerKeys.forEach(key => {
-            const td = document.createElement('td');
-            td.textContent = lead[key] ?? '';
-            tr.appendChild(td);
+    function leadColumns() {
+        if (!leads.length) return [];
+        const first = leads.find(x => x && typeof x === 'object') || {};
+        return Object.keys(first).filter(k => k !== '__id');
+    }
+
+    function renderLeads() {
+        headerKeys = leadColumns();
+        headerRow.innerHTML = '';
+        headerKeys.forEach(k => {
+            const th = document.createElement('th');
+            th.textContent = k;
+            headerRow.appendChild(th);
         });
+        const thAction = document.createElement('th');
+        thAction.textContent = 'Действия';
+        headerRow.appendChild(thAction);
 
-        tr.classList.add('highlight');
+        leadsBody.innerHTML = '';
+        leads.forEach(lead => {
+            const tr = document.createElement('tr');
+            headerKeys.forEach(k => {
+                const td = document.createElement('td');
+                td.textContent = lead[k] ?? '';
+                tr.appendChild(td);
+            });
 
-        if (prepend && tbody.firstChild) {
-            tbody.insertBefore(tr, tbody.firstChild);
+            const tdAction = document.createElement('td');
+            const delBtn = document.createElement('button');
+            delBtn.className = 'danger';
+            delBtn.textContent = 'Удалить';
+            delBtn.onclick = () => safeRun(async () => {
+                if (!lead.__id) return;
+                const resp = await fetch(`/api/leads/${encodeURIComponent(lead.__id)}`, { method: 'DELETE' });
+                const data = await resp.json().catch(() => ({}));
+                if (!resp.ok) throw new Error(data.error || 'Ошибка удаления лида');
+                leads = leads.filter(x => x.__id !== lead.__id);
+                renderLeads();
+                statusEl.textContent = 'Лид удален';
+            }, 'Ошибка удаления лида');
+            tdAction.appendChild(delBtn);
+            tr.appendChild(tdAction);
+
+            leadsBody.appendChild(tr);
+        });
+    }
+
+    function renderAssignees(items) {
+        assigneesBody.innerHTML = '';
+        items.forEach(item => {
+            const tr = document.createElement('tr');
+
+            const idTd = document.createElement('td');
+            idTd.textContent = item.id;
+            tr.appendChild(idTd);
+
+            const nameTd = document.createElement('td');
+            nameTd.textContent = item.name || '-';
+            tr.appendChild(nameTd);
+
+            const limitTd = document.createElement('td');
+            const limitInput = document.createElement('input');
+            limitInput.type = 'number';
+            limitInput.min = '0';
+            limitInput.placeholder = 'без лимита';
+            limitInput.value = item.limit ?? '';
+            limitTd.appendChild(limitInput);
+            tr.appendChild(limitTd);
+
+            const countTd = document.createElement('td');
+            countTd.textContent = item.today_count ?? 0;
+            tr.appendChild(countTd);
+
+            const actionTd = document.createElement('td');
+
+            const saveBtn = document.createElement('button');
+            saveBtn.textContent = 'Сохранить лимит';
+            saveBtn.onclick = () => safeRun(async () => {
+                const limit = parseLimit(limitInput.value);
+                const resp = await fetch(`/api/assignees/${item.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ limit })
+                });
+                const data = await resp.json().catch(() => ({}));
+                if (!resp.ok) throw new Error(data.error || 'Ошибка обновления лимита');
+                renderAssignees(data.items || []);
+                statusEl.textContent = `Лимит обновлен для ${item.id}`;
+            }, 'Ошибка обновления лимита');
+
+            const delBtn = document.createElement('button');
+            delBtn.className = 'danger';
+            delBtn.textContent = 'Удалить';
+            delBtn.onclick = () => safeRun(async () => {
+                const resp = await fetch(`/api/assignees/${item.id}`, { method: 'DELETE' });
+                const data = await resp.json().catch(() => ({}));
+                if (!resp.ok) throw new Error(data.error || 'Ошибка удаления сотрудника');
+                renderAssignees(data.items || []);
+                statusEl.textContent = `Сотрудник ${item.id} удален`;
+            }, 'Ошибка удаления сотрудника');
+
+            actionTd.appendChild(saveBtn);
+            actionTd.appendChild(document.createTextNode(' '));
+            actionTd.appendChild(delBtn);
+            tr.appendChild(actionTd);
+
+            assigneesBody.appendChild(tr);
+        });
+    }
+
+    async function loadAssignees() {
+        const resp = await fetch('/api/assignees');
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(data.error || 'Ошибка загрузки сотрудников');
+        renderAssignees(data.items || []);
+    }
+
+    async function addAssignee() {
+        const id = Number(newAssigneeIdEl.value);
+        if (!Number.isInteger(id) || id <= 0) {
+            throw new Error('ID сотрудника должен быть целым числом > 0');
+        }
+        const limit = parseLimit(newAssigneeLimitEl.value);
+
+        const resp = await fetch('/api/assignees', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id, limit })
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(data.error || 'Ошибка добавления сотрудника');
+
+        renderAssignees(data.items || []);
+        newAssigneeIdEl.value = '';
+        newAssigneeLimitEl.value = '';
+        statusEl.textContent = `Сотрудник ${id} добавлен`;
+    }
+
+    async function loadAllLeads() {
+        const resp = await fetch('/api/leads/last');
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error('Ошибка загрузки последнего лида');
+        if (data && typeof data === 'object' && Object.keys(data).length > 0) {
+            leads = [data];
         } else {
-            tbody.appendChild(tr);
+            leads = [];
         }
+        renderLeads();
     }
 
-    // Первичная загрузка: берём просто последний лид
-    async function loadInitialLead() {
+    async function addManualLead() {
+        const text = manualLeadJsonEl.value.trim();
+        if (!text) throw new Error('Введите JSON лида');
+
+        let payload;
         try {
-            statusEl.textContent = 'Загрузка последнего лида…';
-            const resp = await fetch('/api/leads/last');
-            const lead = await resp.json();
-
-            tbody.innerHTML = '';
-
-            if (Object.keys(lead).length === 0) {
-                statusEl.textContent = 'Лидов пока нет.';
-                return;
-            }
-
-            appendLeadRow(lead);
-            statusEl.textContent = 'Показан последний лид. Ожидаем новые…';
-        } catch (err) {
-            console.error(err);
-            statusEl.textContent = 'Ошибка при загрузке: ' + err;
+            payload = JSON.parse(text);
+        } catch (_) {
+            throw new Error('Некорректный JSON');
         }
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+            throw new Error('Нужен JSON-объект');
+        }
+
+        const resp = await fetch('/api/leads', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(data.error || 'Ошибка добавления лида');
+
+        leads.unshift(data);
+        renderLeads();
+        manualLeadJsonEl.value = '';
+        statusEl.textContent = 'Лид добавлен вручную';
     }
 
-    // Периодический опрос: забираем только новые лиды
     async function pollNewLeads() {
-        try {
-            const resp = await fetch('/api/leads/new');
-            const data = await resp.json();
+        const resp = await fetch('/api/leads/new');
+        const data = await resp.json().catch(() => ([]));
+        if (!resp.ok) throw new Error('Ошибка получения новых лидов');
 
-            if (Array.isArray(data) && data.length > 0) {
-                statusEl.textContent = 'Новые лиды: ' + data.length;
-                // добавляем новые строки в начало таблицы, чтобы сверху были самые свежие
-                data.forEach(lead => appendLeadRow(lead, true));
-            } else {
-                statusEl.textContent = 'Новых лидов нет.';
+        if (Array.isArray(data) && data.length > 0) {
+            for (let i = data.length - 1; i >= 0; i -= 1) {
+                leads.unshift(data[i]);
             }
-        } catch (err) {
-            console.error(err);
-            statusEl.textContent = 'Ошибка при опросе: ' + err;
+            renderLeads();
+            statusEl.textContent = `Новых лидов: ${data.length}`;
+        } else {
+            statusEl.textContent = 'Новых лидов нет';
         }
     }
 
-    // Старт
-    loadInitialLead().then(() => {
-        // Запускаем таймер после первой загрузки
-        setInterval(pollNewLeads, POLL_INTERVAL);
-    });
+    async function safeRun(fn, errPrefix) {
+        try {
+            await fn();
+        } catch (e) {
+            console.error(e);
+            statusEl.textContent = `${errPrefix}: ${e.message || e}`;
+        }
+    }
+
+    addAssigneeBtn.onclick = () => safeRun(addAssignee, 'Ошибка добавления сотрудника');
+    addLeadBtn.onclick = () => safeRun(addManualLead, 'Ошибка добавления лида');
+
+    safeRun(async () => {
+        statusEl.textContent = 'Загрузка данных...';
+        await Promise.all([loadAllLeads(), loadAssignees()]);
+        statusEl.textContent = 'Готово. Ожидание новых лидов...';
+        setInterval(() => safeRun(pollNewLeads, 'Ошибка опроса лидов'), POLL_INTERVAL);
+        setInterval(() => safeRun(loadAssignees, 'Ошибка обновления сотрудников'), POLL_INTERVAL);
+    }, 'Ошибка инициализации');
 </script>
 </body>
 </html>
